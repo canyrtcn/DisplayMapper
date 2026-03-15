@@ -1,11 +1,14 @@
 import os
 import sys
 
-# --- ultra lightweight startup path (NO Qt load) ---
 if "--agent-once" in sys.argv:
     from app.agent_once import run_agent_once
-
     run_agent_once()
+    raise SystemExit(0)
+
+if "--agent-watch" in sys.argv:
+    from app.agent_watch import run_agent_watch
+    run_agent_watch()
     raise SystemExit(0)
 
 from PySide6.QtCore import Qt
@@ -13,6 +16,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -39,10 +43,8 @@ from app.ui.layout_canvas import LayoutCanvas
 
 def resource_path(relative_path: str) -> str:
     base_path = getattr(sys, "_MEIPASS", None)
-
     if base_path:
         return os.path.join(base_path, relative_path)
-
     return os.path.join(os.path.abspath("."), relative_path)
 
 
@@ -52,7 +54,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("DisplayMapper")
         self.setWindowIcon(QIcon(resource_path("DisplayMapper.ico")))
-        self.setMinimumSize(1200, 760)
+        self.setMinimumSize(1280, 820)
 
         self.canvas = LayoutCanvas()
         self.canvas.on_selection_changed = self.update_selection_panel
@@ -61,7 +63,7 @@ class MainWindow(QMainWindow):
         self.status_label.setObjectName("StatusLabel")
 
         self.selection_title = QLabel("Selected monitor")
-        self.selection_title.setObjectName("PanelTitle")
+        self.selection_title.setObjectName("SectionTitle")
 
         self.selection_details = QLabel("No monitor selected")
         self.selection_details.setWordWrap(True)
@@ -71,24 +73,31 @@ class MainWindow(QMainWindow):
         self.selection_details.setObjectName("SelectionDetails")
 
         self.refresh_button = QPushButton("Refresh Layout")
+        self.refresh_button.setObjectName("NeutralButton")
         self.refresh_button.clicked.connect(self.on_refresh_clicked)
 
         self.save_button = QPushButton("Save Profile")
+        self.save_button.setObjectName("SuccessButton")
         self.save_button.clicked.connect(self.on_save_profile_clicked)
 
         self.load_button = QPushButton("Load Profile")
+        self.load_button.setObjectName("NeutralButton")
         self.load_button.clicked.connect(self.on_load_profile_clicked)
 
         self.load_apply_button = QPushButton("Load + Apply Profile")
+        self.load_apply_button.setObjectName("AccentButton")
         self.load_apply_button.clicked.connect(self.on_load_apply_profile_clicked)
 
         self.primary_button = QPushButton("Set as Primary")
+        self.primary_button.setObjectName("WarningButton")
         self.primary_button.clicked.connect(self.on_set_primary_clicked)
 
         self.enable_startup_button = QPushButton("Enable Startup Agent")
+        self.enable_startup_button.setObjectName("SuccessButton")
         self.enable_startup_button.clicked.connect(self.on_enable_startup_clicked)
 
         self.disable_startup_button = QPushButton("Disable Startup Agent")
+        self.disable_startup_button.setObjectName("DangerButton")
         self.disable_startup_button.clicked.connect(self.on_disable_startup_clicked)
 
         self.apply_button = QPushButton("Apply Layout")
@@ -135,32 +144,57 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self):
         panel = QFrame()
         panel.setObjectName("SidePanel")
-        panel.setFixedWidth(340)
+        panel.setFixedWidth(360)
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(12)
+        layout.setSpacing(14)
 
-        info_title = QLabel("Inspector")
-        info_title.setObjectName("PanelTitle")
-
-        automation_title = QLabel("Startup")
-        automation_title.setObjectName("PanelTitle")
-
-        layout.addWidget(info_title)
         layout.addWidget(self.selection_title)
         layout.addWidget(self.selection_details)
-        layout.addSpacing(8)
-        layout.addWidget(automation_title)
+
+        profiles_section = QFrame()
+        profiles_section.setObjectName("InnerSection")
+        profiles_layout = QVBoxLayout(profiles_section)
+        profiles_layout.setContentsMargins(14, 14, 14, 14)
+        profiles_layout.setSpacing(10)
+
+        profiles_title = QLabel("Profiles")
+        profiles_title.setObjectName("SectionTitle")
+        profiles_layout.addWidget(profiles_title)
+        profiles_layout.addWidget(self.save_button)
+        profiles_layout.addWidget(self.load_button)
+        profiles_layout.addWidget(self.load_apply_button)
+
+        display_section = QFrame()
+        display_section.setObjectName("InnerSection")
+        display_layout = QVBoxLayout(display_section)
+        display_layout.setContentsMargins(14, 14, 14, 14)
+        display_layout.setSpacing(10)
+
+        display_title = QLabel("Display Controls")
+        display_title.setObjectName("SectionTitle")
+        display_layout.addWidget(display_title)
+        display_layout.addWidget(self.refresh_button)
+        display_layout.addWidget(self.primary_button)
+        display_layout.addWidget(self.apply_button)
+
+        startup_section = QFrame()
+        startup_section.setObjectName("InnerSection")
+        startup_layout = QVBoxLayout(startup_section)
+        startup_layout.setContentsMargins(14, 14, 14, 14)
+        startup_layout.setSpacing(10)
+
+        startup_title = QLabel("Startup Agent")
+        startup_title.setObjectName("SectionTitle")
+        startup_layout.addWidget(startup_title)
+        startup_layout.addWidget(self.enable_startup_button)
+        startup_layout.addWidget(self.disable_startup_button)
+
+        layout.addWidget(profiles_section)
+        layout.addWidget(display_section)
+        layout.addWidget(startup_section)
         layout.addStretch(1)
-        layout.addWidget(self.refresh_button)
-        layout.addWidget(self.save_button)
-        layout.addWidget(self.load_button)
-        layout.addWidget(self.load_apply_button)
-        layout.addWidget(self.primary_button)
-        layout.addWidget(self.enable_startup_button)
-        layout.addWidget(self.disable_startup_button)
-        layout.addWidget(self.apply_button)
 
         return panel
 
@@ -176,6 +210,12 @@ class MainWindow(QMainWindow):
                 border-radius: 18px;
             }
 
+            #InnerSection {
+                background: #F8FAFC;
+                border: 1px solid #E2E8F0;
+                border-radius: 14px;
+            }
+
             #PageTitle {
                 color: #0F172A;
                 font-size: 24px;
@@ -188,7 +228,7 @@ class MainWindow(QMainWindow):
                 margin-bottom: 4px;
             }
 
-            #PanelTitle {
+            #SectionTitle {
                 color: #0F172A;
                 font-size: 16px;
                 font-weight: 700;
@@ -224,7 +264,6 @@ class MainWindow(QMainWindow):
             }
 
             QPushButton:hover {
-                background: #F8FAFC;
                 border: 1px solid #94A3B8;
             }
 
@@ -243,9 +282,59 @@ class MainWindow(QMainWindow):
                 border: 1px solid #1D4ED8;
             }
 
-            #PrimaryButton:pressed {
-                background: #1E40AF;
-                border: 1px solid #1E40AF;
+            #AccentButton {
+                background: #EEF2FF;
+                color: #3730A3;
+                border: 1px solid #C7D2FE;
+            }
+
+            #AccentButton:hover {
+                background: #E0E7FF;
+                border: 1px solid #A5B4FC;
+            }
+
+            #SuccessButton {
+                background: #ECFDF5;
+                color: #166534;
+                border: 1px solid #BBF7D0;
+            }
+
+            #SuccessButton:hover {
+                background: #DCFCE7;
+                border: 1px solid #86EFAC;
+            }
+
+            #WarningButton {
+                background: #FFF7ED;
+                color: #9A3412;
+                border: 1px solid #FED7AA;
+            }
+
+            #WarningButton:hover {
+                background: #FFEDD5;
+                border: 1px solid #FDBA74;
+            }
+
+            #DangerButton {
+                background: #FEF2F2;
+                color: #991B1B;
+                border: 1px solid #FECACA;
+            }
+
+            #DangerButton:hover {
+                background: #FEE2E2;
+                border: 1px solid #FCA5A5;
+            }
+
+            #NeutralButton {
+                background: #FFFFFF;
+                color: #0F172A;
+                border: 1px solid #CBD5E1;
+            }
+
+            #NeutralButton:hover {
+                background: #F8FAFC;
+                border: 1px solid #94A3B8;
             }
         """)
 
@@ -265,9 +354,10 @@ class MainWindow(QMainWindow):
         self.primary_button.setEnabled(not selected.get("primary", False))
 
         primary_text = "Yes" if selected.get("primary", False) else "No"
+        clean_name = selected["name"].replace("\\\\.\\", "")
 
         details = (
-            f'Name: {selected["name"]}\n'
+            f'Name: {clean_name}\n'
             f'Friendly name: {selected.get("friendly_name", "Unknown")}\n'
             f'Resolution: {selected["width"]} × {selected["height"]}\n'
             f'Coordinates: ({selected["x"]}, {selected["y"]})\n'
