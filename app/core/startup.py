@@ -4,7 +4,6 @@ from pathlib import Path
 
 from win32com.client import Dispatch
 
-
 APP_SHORTCUT_NAME = "DisplayMapper Agent.lnk"
 
 
@@ -17,16 +16,9 @@ def get_startup_shortcut_path() -> str:
 
 
 def _build_command():
-    """
-    Development mode:
-        pythonw.exe <project>/main.py --agent-once
-
-    PyInstaller onedir/onefile mode:
-        DisplayMapper.exe --agent-once
-    """
     if getattr(sys, "frozen", False):
         target_path = sys.executable
-        arguments = "--agent-once"
+        arguments = "--agent-watch"
         working_directory = os.path.dirname(sys.executable)
         return target_path, arguments, working_directory
 
@@ -36,7 +28,7 @@ def _build_command():
 
     script_path = os.path.abspath(sys.argv[0])
     target_path = pythonw_path
-    arguments = f'"{script_path}" --agent-once'
+    arguments = f'"{script_path}" --agent-watch'
     working_directory = os.path.dirname(script_path)
     return target_path, arguments, working_directory
 
