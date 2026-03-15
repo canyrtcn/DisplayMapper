@@ -13,13 +13,17 @@ class LayoutCanvas(QWidget):
         self.selected_monitor = None
         self.dragging_monitor = None
         self.drag_offset = QPoint()
+        self.drag_start_monitor_pos = None
         self.on_selection_changed = None
 
-        self.canvas_padding = 40
-        self.min_scale = 0.08
-        self.max_scale = 0.22
+        self.canvas_padding = 32
+        self.min_scale = 0.035
+        self.max_scale = 0.24
 
-        self.setMinimumHeight(420)
+        self.default_min_card_width = 88
+        self.default_min_card_height = 58
+
+        self.setMinimumHeight(460)
         self.setMouseTracking(True)
 
         self.refresh_monitors()
@@ -93,6 +97,18 @@ class LayoutCanvas(QWidget):
 
         return min_x, min_y, max_x, max_y
 
+    def _card_min_size(self):
+        count = max(1, len(self.monitors))
+
+        if count <= 2:
+            return 120, 80
+        if count == 3:
+            return 96, 66
+        if count == 4:
+            return 82, 58
+
+        return self.default_min_card_width, self.default_min_card_height
+
     def _scale_and_offset(self):
         min_x, min_y, max_x, max_y = self._virtual_bounds()
 
@@ -116,11 +132,12 @@ class LayoutCanvas(QWidget):
 
     def monitor_rect(self, monitor):
         scale, offset_x, offset_y = self._scale_and_offset()
+        min_w, min_h = self._card_min_size()
 
         x = int(monitor["x"] * scale + offset_x)
         y = int(monitor["y"] * scale + offset_y)
-        w = max(120, int(monitor["width"] * scale))
-        h = max(80, int(monitor["height"] * scale))
+        w = max(min_w, int(monitor["width"] * scale))
+        h = max(min_h, int(monitor["height"] * scale))
 
         return QRect(x, y, w, h)
 
@@ -153,7 +170,7 @@ class LayoutCanvas(QWidget):
             fill_color = QColor("#FFFFFF")
             border_color = QColor("#CBD5E1")
 
-        if is_selected:
+        if is_selected and not monitor.get("primary", False):
             border_color = QColor("#0F172A")
 
         painter.setPen(QPen(border_color, 2))
@@ -194,8 +211,13 @@ class LayoutCanvas(QWidget):
         body_font = QFont("Segoe UI", 9)
         painter.setFont(body_font)
 
+        friendly_name = monitor.get("friendly_name", "Unknown monitor")
+        max_name_length = 24
+        if len(friendly_name) > max_name_length:
+            friendly_name = friendly_name[:max_name_length - 1] + "…"
+
         lines = [
-            monitor.get("friendly_name", "Unknown monitor"),
+            friendly_name,
             f'{monitor["width"]} × {monitor["height"]}',
             f'({monitor["x"]}, {monitor["y"]})'
         ]
@@ -254,15 +276,36 @@ class LayoutCanvas(QWidget):
         side, best_x, best_y, target = best_target
 
         if side in ("left", "right"):
-            if abs(current_y - target["y"]) < 140:
+            if abs(current_y - target["y"]) < 160:
                 best_y = target["y"]
 
         if side in ("top", "bottom"):
-            if abs(current_x - target["x"]) < 140:
+            if abs(current_x - target["x"]) < 160:
                 best_x = target["x"]
 
         moving_monitor["x"] = int(best_x)
         moving_monitor["y"] = int(best_y)
+
+    def _clamp_drag_position(self, monitor):
+        others = [m for m in self.monitors if m["name"] != monitor["name"]]
+        if not others or self.drag_start_monitor_pos is None:
+            return
+
+        min_other_x = min(m["x"] for m in others)
+        max_other_x = max(m["x"] + m["width"] for m in others)
+        min_other_y = min(m["y"] for m in others)
+        max_other_y = max(m["y"] + m["height"] for m in others)
+
+        x_margin = max(monitor["width"] * 1.25, 220)
+        y_margin = max(monitor["height"] * 1.25, 180)
+
+        min_x = int(min_other_x - x_margin - monitor["width"])
+        max_x = int(max_other_x + x_margin)
+        min_y = int(min_other_y - y_margin - monitor["height"])
+        max_y = int(max_other_y + y_margin)
+
+        monitor["x"] = max(min_x, min(monitor["x"], max_x))
+        monitor["y"] = max(min_y, min(monitor["y"], max_y))
 
     def mousePressEvent(self, event):
         for monitor in reversed(self.monitors):
@@ -271,12 +314,14 @@ class LayoutCanvas(QWidget):
                 self.selected_monitor = monitor
                 self.dragging_monitor = monitor
                 self.drag_offset = event.pos() - rect.topLeft()
+                self.drag_start_monitor_pos = (monitor["x"], monitor["y"])
                 self._notify_selection_changed()
                 self.update()
                 return
 
         self.selected_monitor = None
         self.dragging_monitor = None
+        self.drag_start_monitor_pos = None
         self._notify_selection_changed()
         self.update()
 
@@ -292,6 +337,8 @@ class LayoutCanvas(QWidget):
         self.dragging_monitor["x"] = int((new_x_pixels - offset_x) / scale)
         self.dragging_monitor["y"] = int((new_y_pixels - offset_y) / scale)
 
+        self._clamp_drag_position(self.dragging_monitor)
+
         self._notify_selection_changed()
         self.update()
 
@@ -300,5 +347,6 @@ class LayoutCanvas(QWidget):
             self._snap_monitor_to_nearest_side(self.dragging_monitor)
 
         self.dragging_monitor = None
+        self.drag_start_monitor_pos = None
         self._notify_selection_changed()
         self.update()
