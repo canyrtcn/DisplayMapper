@@ -1,3 +1,6 @@
+import ctypes
+import time
+
 from app.core.apply_engine import apply_layout
 from app.core.discovery import get_monitors
 from app.core.profiles import (
@@ -7,28 +10,58 @@ from app.core.profiles import (
     profile_matches_current,
 )
 
+user32 = ctypes.windll.user32
+
+POLL_INTERVAL_SECONDS = 2.0
+POST_READY_DELAY_SECONDS = 1.0
+
+
+def _is_shell_ready():
+    try:
+        shell_hwnd = user32.GetShellWindow()
+        tray_hwnd = user32.FindWindowW("Shell_TrayWnd", None)
+        return bool(shell_hwnd) and bool(tray_hwnd)
+    except Exception:
+        return False
+
+
+def _load_profile_safe():
+    try:
+        return load_profile(DEFAULT_PROFILE_PATH)
+    except Exception:
+        return None
+
 
 def run_agent_once():
-    try:
-        profile_data = load_profile(DEFAULT_PROFILE_PATH)
-    except FileNotFoundError:
-        print("AgentOnce: no saved profile found.")
+    print("AgentOnce: waiting for shell...")
+
+    while not _is_shell_ready():
+        time.sleep(1)
+
+    time.sleep(POST_READY_DELAY_SECONDS)
+
+    profile_data = _load_profile_safe()
+    if profile_data is None:
         return
-    except (OSError, ValueError) as e:
-        print("AgentOnce: profile load failed:", e)
-        return
 
-    try:
-        current = get_monitors()
+    while True:
+        try:
+            current = get_monitors()
+        except Exception:
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
 
-        if profile_matches_current(current, profile_data):
-            print("AgentOnce: layout already correct.")
-            return
+        try:
+            if profile_matches_current(current, profile_data):
+                print("AgentOnce: layout correct. exiting.")
+                return
 
-        updated = apply_profile_to_monitors(current, profile_data)
+            updated = apply_profile_to_monitors(current, profile_data)
 
-        print("AgentOnce: applying saved layout...")
-        apply_layout(updated)
+            print("AgentOnce: applying layout...")
+            apply_layout(updated)
 
-    except (OSError, RuntimeError, ValueError) as e:
-        print("AgentOnce: apply failed:", e)
+        except Exception:
+            pass
+
+        time.sleep(POLL_INTERVAL_SECONDS)
