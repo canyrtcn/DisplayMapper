@@ -12,7 +12,7 @@ DisplayMapper provides a simple visual interface that allows users to quickly po
 
 ## Screenshot
 
-![DisplayMapper Interface](screenshot.png)
+![DisplayMapper Interface](screenshot_v150.png)
 
 ---
 
