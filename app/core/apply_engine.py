@@ -95,10 +95,7 @@ def _normalize_device_name(name: str) -> str:
 
 
 def _prepare_monitors(monitors):
-    """
-    Shift coordinates so the intended primary sits at (0, 0).
-    All other monitors keep their relative positions.
-    """
+
     if not monitors:
         raise ValueError("No monitors to apply.")
     primaries = [m for m in monitors if m.get("primary")]
@@ -134,14 +131,7 @@ def _ok(code: int) -> bool:
 
 def _cds(device_name: str, x: int, y: int,
          is_primary: bool, noreset: bool) -> int:
-    """
-    Call ChangeDisplaySettingsExW to reposition one monitor.
 
-    We read the current DEVMODE and only change dmPosition + dmFields.
-    Using DM_POSITION alone (not OR-ing in width/height/freq) is correct:
-    Windows updates *only* the fields flagged in dmFields, leaving the
-    rest of the hardware settings untouched.
-    """
     dm = _get_devmode(device_name)
     dm.dmPosition.x = x
     dm.dmPosition.y = y
@@ -162,32 +152,7 @@ def _commit() -> int:
 
 
 def apply_layout(monitors):
-    """
-    Apply a multi-monitor layout, robustly handling primary-monitor changes.
 
-    Key insight
-    -----------
-    When promoting a new primary, Windows requires that at no point during
-    the transaction does the primary sit somewhere other than (0, 0), AND
-    no two monitors can occupy (0, 0) at the same time.
-
-    The only sequence that satisfies both constraints is:
-
-        1. Promote the *new* primary to (0, 0)  [CDS_SET_PRIMARY]
-           Windows simultaneously demotes the old primary (its flag is
-           cleared) but does NOT move it — so the old primary is still
-           physically at (0, 0) until we move it.
-
-        2. Move every secondary to its final position.
-           The old primary is among them; after this step it vacates (0, 0).
-
-        3. Commit (broadcast null call).
-
-    We try this twice: once with CDS_NORESET (batched) and once without
-    (each call committed immediately).  The immediate variant is slower
-    (one flash per monitor) but works on drivers that reject batched
-    primary promotion.
-    """
     prepared    = _prepare_monitors(monitors)
     new_primary = next(m for m in prepared if m["primary"])
     secondaries = [m for m in prepared if not m["primary"]]
