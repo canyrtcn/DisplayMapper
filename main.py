@@ -90,6 +90,7 @@ class MainWindow(QMainWindow):
 
         self.primary_button = QPushButton("Set as Primary")
         self.primary_button.setObjectName("WarningButton")
+        self.primary_button.setToolTip("Set the selected monitor as the primary display.")
         self.primary_button.clicked.connect(self.on_set_primary_clicked)
 
         self.enable_startup_button = QPushButton("Enable Startup Agent")
@@ -225,27 +226,26 @@ class MainWindow(QMainWindow):
             #SubTitle {
                 color: #64748B;
                 font-size: 13px;
-                margin-bottom: 4px;
             }
 
             #SectionTitle {
                 color: #0F172A;
-                font-size: 16px;
+                font-size: 15px;
                 font-weight: 700;
             }
 
-            #SelectionDetails {
-                color: #475569;
-                font-size: 13px;
+            #StatusLabel {
+                color: #64748B;
+                font-size: 12px;
+                padding: 6px 10px;
                 background: #F8FAFC;
                 border: 1px solid #E2E8F0;
-                border-radius: 12px;
-                padding: 12px;
+                border-radius: 8px;
             }
 
-            #StatusLabel {
-                color: #475569;
-                font-size: 12px;
+            #SelectionDetails {
+                color: #334155;
+                font-size: 13px;
                 background: #F8FAFC;
                 border: 1px solid #E2E8F0;
                 border-radius: 10px;
@@ -269,6 +269,12 @@ class MainWindow(QMainWindow):
 
             QPushButton:pressed {
                 background: #E2E8F0;
+            }
+
+            QPushButton:disabled {
+                background: #F1F5F9;
+                color: #94A3B8;
+                border: 1px solid #E2E8F0;
             }
 
             #PrimaryButton {
@@ -351,15 +357,17 @@ class MainWindow(QMainWindow):
             self.primary_button.setEnabled(False)
             return
 
-        self.primary_button.setEnabled(not selected.get("primary", False))
+        # Disable "Set as Primary" if the selected monitor is already primary
+        already_primary = selected.get("primary", False)
+        self.primary_button.setEnabled(not already_primary)
 
-        primary_text = "Yes" if selected.get("primary", False) else "No"
+        primary_text = "Yes" if already_primary else "No"
         clean_name = selected["name"].replace("\\\\.\\", "")
 
         details = (
             f'Name: {clean_name}\n'
             f'Friendly name: {selected.get("friendly_name", "Unknown")}\n'
-            f'Resolution: {selected["width"]} × {selected["height"]}\n'
+            f'Resolution: {selected["width"]} \u00d7 {selected["height"]}\n'
             f'Coordinates: ({selected["x"]}, {selected["y"]})\n'
             f'Primary: {primary_text}'
         )
@@ -408,9 +416,32 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Select a monitor first.")
             return
 
-        self.canvas.set_selected_as_primary()
-        self.update_selection_panel()
-        self.status_label.setText("Primary monitor updated in editor. Click Apply Layout to commit.")
+        if selected.get("primary", False):
+            self.status_label.setText("This monitor is already primary.")
+            return
+
+        target_name = selected["name"]
+
+        # Build the monitor list to send to Windows using the CURRENT
+        # coordinates as reported by Windows (via canvas.monitors, which
+        # was last populated by get_monitors()), but with only the primary
+        # flag changed.  Do NOT shift coordinates here — _prepare_monitors
+        # inside apply_layout will normalise so the new primary sits at (0,0).
+        win_monitors = [dict(m) for m in self.canvas.monitors]
+        for m in win_monitors:
+            m["primary"] = (m["name"] == target_name)
+
+        try:
+            apply_layout(win_monitors)
+            # Update canvas visually after successful apply
+            self.canvas.set_selected_as_primary()
+            self.canvas.refresh_monitors()
+            self.update_selection_panel()
+            friendly = selected.get("friendly_name", target_name)
+            self.status_label.setText(f'"{friendly}" set as primary and layout applied.')
+        except Exception as e:
+            self.status_label.setText(f"Set primary failed: {e}")
+            QMessageBox.critical(self, "DisplayMapper", f"Set primary failed:\n{e}")
 
     def on_enable_startup_clicked(self):
         try:
