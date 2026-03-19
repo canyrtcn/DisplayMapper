@@ -14,6 +14,9 @@ class LayoutCanvas(QWidget):
         self.dragging_monitor = None
         self.drag_offset = QPoint()
         self.drag_start_monitor_pos = None
+        self.drag_start_mouse_pos = QPoint()
+        self.drag_fixed_scale = None
+        self.drag_base_bounds = None
         self.on_selection_changed = None
 
         self.canvas_padding = 32
@@ -22,6 +25,13 @@ class LayoutCanvas(QWidget):
 
         self.default_min_card_width = 88
         self.default_min_card_height = 58
+
+        self.release_snap_distance_limit = 1200
+        self.min_overlap_pixels = 120
+
+        self.drag_expand_ratio = 0.04
+        self.drag_min_expand_pixels = 24
+        self.drag_max_expand_pixels = 72
 
         self.setMinimumHeight(460)
         self.setMouseTracking(True)
@@ -84,6 +94,9 @@ class LayoutCanvas(QWidget):
 
     @staticmethod
     def _display_label(monitor):
+        friendly_name = monitor.get("friendly_name", "").strip()
+        if friendly_name:
+            return friendly_name
         return monitor["name"].replace("\\\\.\\", "")
 
     def _virtual_bounds(self):
@@ -109,8 +122,8 @@ class LayoutCanvas(QWidget):
 
         return self.default_min_card_width, self.default_min_card_height
 
-    def _scale_and_offset(self):
-        min_x, min_y, max_x, max_y = self._virtual_bounds()
+    def _compute_scale_and_offset_from_bounds(self, bounds):
+        min_x, min_y, max_x, max_y = bounds
 
         virtual_width = max(1, max_x - min_x)
         virtual_height = max(1, max_y - min_y)
@@ -129,6 +142,37 @@ class LayoutCanvas(QWidget):
         offset_y = (self.height() - content_height) / 2 - min_y * scale
 
         return scale, offset_x, offset_y
+
+    def _soft_drag_bounds(self, current_bounds):
+        if self.drag_base_bounds is None:
+            return current_bounds
+
+        base_min_x, base_min_y, base_max_x, base_max_y = self.drag_base_bounds
+        cur_min_x, cur_min_y, cur_max_x, cur_max_y = current_bounds
+
+        base_width = max(1, base_max_x - base_min_x)
+        base_height = max(1, base_max_y - base_min_y)
+
+        allow_x = int(base_width * self.drag_expand_ratio)
+        allow_y = int(base_height * self.drag_expand_ratio)
+
+        allow_x = max(self.drag_min_expand_pixels, min(allow_x, self.drag_max_expand_pixels))
+        allow_y = max(self.drag_min_expand_pixels, min(allow_y, self.drag_max_expand_pixels))
+
+        min_x = max(cur_min_x, base_min_x - allow_x)
+        min_y = max(cur_min_y, base_min_y - allow_y)
+        max_x = min(cur_max_x, base_max_x + allow_x)
+        max_y = min(cur_max_y, base_max_y + allow_y)
+
+        return min_x, min_y, max_x, max_y
+
+    def _scale_and_offset(self):
+        bounds = self._virtual_bounds()
+
+        if self.dragging_monitor is not None:
+            bounds = self._soft_drag_bounds(bounds)
+
+        return self._compute_scale_and_offset_from_bounds(bounds)
 
     def monitor_rect(self, monitor):
         scale, offset_x, offset_y = self._scale_and_offset()
@@ -240,48 +284,80 @@ class LayoutCanvas(QWidget):
         for monitor in self.monitors:
             self._draw_monitor_card(painter, monitor)
 
-    def _snap_monitor_to_nearest_side(self, moving_monitor):
+    def _clamp_to_vertical_overlap(self, proposed_y, moving_monitor, target):
+        min_overlap = min(
+            self.min_overlap_pixels,
+            moving_monitor["height"],
+            target["height"],
+        )
+
+        min_y = target["y"] - moving_monitor["height"] + min_overlap
+        max_y = target["y"] + target["height"] - min_overlap
+
+        return int(max(min_y, min(proposed_y, max_y)))
+
+    def _clamp_to_horizontal_overlap(self, proposed_x, moving_monitor, target):
+        min_overlap = min(
+            self.min_overlap_pixels,
+            moving_monitor["width"],
+            target["width"],
+        )
+
+        min_x = target["x"] - moving_monitor["width"] + min_overlap
+        max_x = target["x"] + target["width"] - min_overlap
+
+        return int(max(min_x, min(proposed_x, max_x)))
+
+    def _best_snap_target(self, moving_monitor):
         others = [m for m in self.monitors if m["name"] != moving_monitor["name"]]
         if not others:
-            return
-
-        best_target = None
-        best_distance = None
+            return None
 
         current_x = moving_monitor["x"]
         current_y = moving_monitor["y"]
 
-        for target in others:
-            left_x = target["x"] - moving_monitor["width"]
-            right_x = target["x"] + target["width"]
-            top_y = target["y"] - moving_monitor["height"]
-            bottom_y = target["y"] + target["height"]
+        best = None
+        best_distance = None
 
+        for target in others:
             candidates = [
-                ("left", left_x, target["y"]),
-                ("right", right_x, target["y"]),
-                ("top", target["x"], top_y),
-                ("bottom", target["x"], bottom_y),
+                ("left", target["x"] - moving_monitor["width"], current_y, target),
+                ("right", target["x"] + target["width"], current_y, target),
+                ("top", current_x, target["y"] - moving_monitor["height"], target),
+                ("bottom", current_x, target["y"] + target["height"], target),
             ]
 
-            for side, cx, cy in candidates:
-                dist = abs(current_x - cx) + abs(current_y - cy)
-                if best_distance is None or dist < best_distance:
-                    best_distance = dist
-                    best_target = (side, cx, cy, target)
+            for side, candidate_x, candidate_y, candidate_target in candidates:
+                if side in ("left", "right"):
+                    candidate_y = self._clamp_to_vertical_overlap(
+                        candidate_y,
+                        moving_monitor,
+                        candidate_target
+                    )
+                else:
+                    candidate_x = self._clamp_to_horizontal_overlap(
+                        candidate_x,
+                        moving_monitor,
+                        candidate_target
+                    )
 
-        if best_target is None:
+                distance = abs(current_x - candidate_x) + abs(current_y - candidate_y)
+
+                if best_distance is None or distance < best_distance:
+                    best_distance = distance
+                    best = (candidate_x, candidate_y, candidate_target, side, distance)
+
+        return best
+
+    def _snap_monitor_to_nearest_side(self, moving_monitor):
+        best = self._best_snap_target(moving_monitor)
+        if best is None:
             return
 
-        side, best_x, best_y, target = best_target
+        best_x, best_y, _target, _side, distance = best
 
-        if side in ("left", "right"):
-            if abs(current_y - target["y"]) < 160:
-                best_y = target["y"]
-
-        if side in ("top", "bottom"):
-            if abs(current_x - target["x"]) < 160:
-                best_x = target["x"]
+        if distance > self.release_snap_distance_limit:
+            return
 
         moving_monitor["x"] = int(best_x)
         moving_monitor["y"] = int(best_y)
@@ -296,13 +372,23 @@ class LayoutCanvas(QWidget):
         min_other_y = min(m["y"] for m in others)
         max_other_y = max(m["y"] + m["height"] for m in others)
 
-        x_margin = max(monitor["width"] * 1.25, 220)
-        y_margin = max(monitor["height"] * 1.25, 180)
+        count = len(self.monitors)
 
-        min_x = int(min_other_x - x_margin - monitor["width"])
-        max_x = int(max_other_x + x_margin)
-        min_y = int(min_other_y - y_margin - monitor["height"])
-        max_y = int(max_other_y + y_margin)
+        if count <= 2:
+            left_margin = max(int(monitor["width"] * 0.12), 36)
+            right_margin = max(int(monitor["width"] * 0.07), 20)
+            top_margin = max(int(monitor["height"] * 0.12), 36)
+            bottom_margin = max(int(monitor["height"] * 0.12), 36)
+        else:
+            left_margin = max(int(monitor["width"] * 0.22), 64)
+            right_margin = max(int(monitor["width"] * 0.06), 18)
+            top_margin = max(int(monitor["height"] * 0.18), 56)
+            bottom_margin = max(int(monitor["height"] * 0.18), 56)
+
+        min_x = int(min_other_x - left_margin - monitor["width"])
+        max_x = int(max_other_x + right_margin)
+        min_y = int(min_other_y - top_margin - monitor["height"])
+        max_y = int(max_other_y + bottom_margin)
 
         monitor["x"] = max(min_x, min(monitor["x"], max_x))
         monitor["y"] = max(min_y, min(monitor["y"], max_y))
@@ -312,30 +398,51 @@ class LayoutCanvas(QWidget):
             rect = self.monitor_rect(monitor)
             if rect.contains(event.pos()):
                 self.selected_monitor = monitor
+                self._notify_selection_changed()
+
+                if monitor.get("primary", False):
+                    self.dragging_monitor = None
+                    self.drag_start_monitor_pos = None
+                    self.drag_start_mouse_pos = QPoint()
+                    self.drag_fixed_scale = None
+                    self.drag_base_bounds = None
+                    self.update()
+                    return
+
                 self.dragging_monitor = monitor
                 self.drag_offset = event.pos() - rect.topLeft()
+                self.drag_start_mouse_pos = event.pos()
                 self.drag_start_monitor_pos = (monitor["x"], monitor["y"])
-                self._notify_selection_changed()
+                self.drag_base_bounds = self._virtual_bounds()
+
+                scale, _, _ = self._compute_scale_and_offset_from_bounds(self.drag_base_bounds)
+                self.drag_fixed_scale = scale
+
                 self.update()
                 return
 
         self.selected_monitor = None
         self.dragging_monitor = None
         self.drag_start_monitor_pos = None
+        self.drag_start_mouse_pos = QPoint()
+        self.drag_fixed_scale = None
+        self.drag_base_bounds = None
         self._notify_selection_changed()
         self.update()
 
     def mouseMoveEvent(self, event):
-        if not self.dragging_monitor:
+        if not self.dragging_monitor or self.drag_start_monitor_pos is None or not self.drag_fixed_scale:
             return
 
-        scale, offset_x, offset_y = self._scale_and_offset()
+        delta_pixels = event.pos() - self.drag_start_mouse_pos
 
-        new_x_pixels = event.pos().x() - self.drag_offset.x()
-        new_y_pixels = event.pos().y() - self.drag_offset.y()
+        delta_x_world = int(delta_pixels.x() / self.drag_fixed_scale)
+        delta_y_world = int(delta_pixels.y() / self.drag_fixed_scale)
 
-        self.dragging_monitor["x"] = int((new_x_pixels - offset_x) / scale)
-        self.dragging_monitor["y"] = int((new_y_pixels - offset_y) / scale)
+        start_x, start_y = self.drag_start_monitor_pos
+
+        self.dragging_monitor["x"] = start_x + delta_x_world
+        self.dragging_monitor["y"] = start_y + delta_y_world
 
         self._clamp_drag_position(self.dragging_monitor)
 
@@ -348,5 +455,8 @@ class LayoutCanvas(QWidget):
 
         self.dragging_monitor = None
         self.drag_start_monitor_pos = None
+        self.drag_start_mouse_pos = QPoint()
+        self.drag_fixed_scale = None
+        self.drag_base_bounds = None
         self._notify_selection_changed()
         self.update()
